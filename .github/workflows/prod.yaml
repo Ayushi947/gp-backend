@@ -1,0 +1,52 @@
+name: Build and Push to ecr
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Choose environment'
+        required: true
+        type: choice
+        options:
+          - prod
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+
+    env:
+      ECR_REPOSITORY: glidingpath-backend-prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push Docker Image for prod
+        if: ${{ github.event.inputs.environment == 'prod' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:prod-v1.0.${{ github.run_number }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:prod-${{ github.sha }}
+
+      - name: Remove local Docker image
+        run: |
+          docker rmi ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:prod-v1.0.${{ github.run_number }} || true
+          docker rmi ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:prod-${{ github.sha }} || true
