@@ -1,0 +1,22 @@
+# Production override for docker-compose
+# Uses pre-built images from AWS ECR instead of building locally
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  app:
+    # Override build with ECR image
+    image: ${BACKEND_IMAGE}
+    build: null  # Disable local build in production
+    environment:
+      # Production-specific environment variables
+      SPRING_PROFILES_ACTIVE: prod
+      JAVA_OPTS: >-
+        -Xms512m
+        -Xmx2g
+        -XX:+UseG1GC
+        -XX:MaxGCPauseMillis=200
+        -XX:+UseContainerSupport
+        -XX:MaxRAMPercentage=75.0
+        -XX:+HeapDumpOnOutOfMemoryError
+        -XX:HeapDumpPath=/app/logs
+        -Djava.security.egd=file:/dev/./urandom
