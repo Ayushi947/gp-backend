@@ -1,0 +1,171 @@
+services:
+  # BTC Mock Server - SFTP server for custodian integration testing
+  btc-mock-server:
+    build:
+      context: .
+      dockerfile: modules/x-btc-mock-server/Dockerfile
+    container_name: btc-mock-server
+    ports:
+      - "8099:8099"  # HTTP API
+      - "2222:2222"  # SFTP
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - BTC_MOCK_SFTP_HOST=0.0.0.0
+    volumes:
+      - btc-sftp-data:/app/sftp-root
+    # healthcheck:
+    #   test: ["CMD-SHELL", "curl -f http://localhost:8099/actuator/health || exit 1"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   start_period: 45s
+    #   retries: 3
+    # restart: always
+    networks:
+      - glidingpath-network
+
+  app:
+    image: ${BACKEND_IMAGE:-glidingpath-backend:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: glidingpath-backend
+    # Load ALL env vars from external file (won't be wiped by deployment)
+    # The external file should use Spring Boot's native property names
+    env_file:
+      - /home/ubuntu/gp-backend.env
+    ports:
+      - "9090:9090"
+    restart: always
+    depends_on:
+      - btc-mock-server
+        # condition: service_healthy
+    # Allow container to access host machine services (Redis, PostgreSQL on host)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Override BTC SFTP connection to use container name instead of localhost
+      - BTC_SFTP_HOST=btc-mock-server
+      - BTC_SFTP_PORT=2222
+      # Cookie config for HTTP/IP-based dev deployment (browser rejects
+      # Secure cookies on HTTP and Domain= attribute on non-domain hosts).
+      # These wins over /home/ubuntu/gp-backend.env via compose precedence.
+      - APP_COOKIE_SECURE=false
+      - APP_COOKIE_SAME_SITE=Lax
+      - APP_COOKIE_DOMAIN=
+    # Extended health check for slow Spring Boot startup
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9090/v1/api/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 5
+    networks:
+      - glidingpath-network
+ 
+  # Kafka for Event Store (CQRS)
+  # zookeeper:
+  #   image: confluentinc/cp-zookeeper:latest
+  #   container_name: zookeeper
+  #   environment:
+  #     ZOOKEEPER_CLIENT_PORT: 2181
+  #     ZOOKEEPER_TICK_TIME: 2000
+  #   ports:
+  #     - "2181:2181"
+ 
+  # kafka:
+  #   image: confluentinc/cp-kafka:7.4.0
+  #   container_name: kafka
+  #   depends_on:
+  #     - zookeeper
+  #   ports:
+  #     - "9092:9092"
+  #     - "9101:9101"
+  #   environment:
+  #     KAFKA_BROKER_ID: 1
+  #     KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+  #     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+  #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+  #     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  #     KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  #     KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+  #     KAFKA_NUM_PARTITIONS: 3
+  #     KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+ 
+  # # Redis for Projection Caching
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: redis
+  #   ports:
+  #     - "6379:6379"
+  #   command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+  #   volumes:
+  #     - redis_data:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+ 
+  # business-central:
+  #   platform: linux/amd64
+  #   image: quay.io/kiegroup/business-central-workbench-showcase:latest
+  #   container_name: glidingpath-business-central
+  #   ports:
+  #     - "3001:3001"
+  #     - "9990:9990"
+  #   environment:
+  #     - JAVA_OPTS=-Xms1024m -Xmx2048m -XX:MetaspaceSize=512M -XX:MaxMetaspaceSize=1024m -Djboss.http.port=3001
+  #     - KIE_SERVER_CONTROLLER=http://business-central:3001/business-central/rest/controller
+  #     - KIE_SERVER_ID=sample-server
+  #   volumes:
+  #     - business-central-data:/opt/jboss/wildfly/standalone/data
+  #     - business-central-logs:/opt/jboss/wildfly/standalone/log
+  #     - business-central-m2:/opt/jboss/.m2
+  #     - business-central-git:/opt/jboss/wildfly/bin/.niogit
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3001/business-central"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 120s
+  #   restart: unless-stopped
+    
+  # KIE Server removed - not needed for this setup
+  # App downloads KJARs directly from Business Central's Maven repository
+  # kie-server:
+  #   image: jboss/kie-server-showcase:latest
+  #   container_name: glidingpath-kie-server
+  #   depends_on:
+  #     - business-central
+  #   ports:
+  #     - "8091:8091"
+  #   environment:
+  #     - JAVA_OPTS=-Xms512m -Xmx1024m -XX:MetaspaceSize=256M -XX:MaxMetaspaceSize=512m -Djboss.http.port=8091
+  #     - KIE_SERVER_CONTROLLER=http://business-central:3001/business-central/rest/controller
+  #     - KIE_SERVER_ID=sample-server
+  #     - KIE_SERVER_LOCATION=http://kie-server:8091/kie-server/services/rest/server
+  #     - KIE_MAVEN_REPO=http://business-central:3001/business-central/maven2/
+  #     - KIE_MAVEN_REPO_USER=admin
+  #     - KIE_MAVEN_REPO_PASSWORD=admin
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8091/kie-server/services/rest/server"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 60s
+  #   restart: unless-stopped
+ 
+# volumes:
+#   business-central-data:
+#   business-central-logs:
+#   business-central-m2:
+#   business-central-git:
+
+# Docker networks and volumes
+networks:
+  glidingpath-network:
+    driver: bridge
+
+volumes:
+  btc-sftp-data:
+  
